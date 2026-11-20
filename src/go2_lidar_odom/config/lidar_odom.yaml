@@ -1,0 +1,67 @@
+# go2_lidar_odom 설정 — 점군만 3D 점-평면 ICP 오도메트리 (Go2 L1)
+#
+# 모든 값은 실행할 때만 정해짐 (실행 중 ros2 param set 으로는 바뀌지 않음).
+# 바꾸려면 이 파일을 고치거나 launch 인자로 덮어씀. 예:
+#   ros2 launch go2_lidar_odom lidar_odom.launch.py normal_k:=25
+#
+# '/**' 는 노드 이름과 상관없이 이 값을 쓰라는 뜻.
+/**:
+  ros__parameters:
+    # ------------------------------------------------------------------ 입력
+    cloud_topic: /utlidar/cloud          # L1 점군 (sensor_msgs/PointCloud2)
+    qos_reliability: best_effort         # best_effort 는 reliable 로 보내는 쪽과도 연결됨
+    qos_depth: 1                         # 1 = 처리가 밀리면 가장 새 프레임만 처리 (지연이 쌓이지 않음)
+
+    # ------------------------------------------------------------------ 출력 이름 (팀원 코드에 맞게 바꿈)
+    #   빈 문자열("")로 두면 그 출력은 내지 않음
+    odom_frame: lidar_odom               # 출발점에 고정된 좌표계
+    base_frame: lidar_odom_base          # 추정한 로봇 몸체 (로봇의 기존 odom → base_link 와 겹치지 않게 다른 이름)
+    publish_tf: true                     # odom_frame → base_frame TF
+    odom_topic: /lidar_odom/odometry     # nav_msgs/Odometry (자세 + 몸체 속도)
+    path_topic: /lidar_odom/path         # nav_msgs/Path
+    path_publish_period: 1.0             # [s]
+    registered_cloud_topic: /lidar_odom/cloud_registered   # 이번 프레임 점을 odom_frame 으로 옮긴 것
+    cloud_out_mode: all                  # all = 받은 점 전부 (바닥·낮은 장애물 포함) / used = 위치 계산에 쓴 점만
+    cloud_out_min_range: 0.6             # all 모드에서 센서 거리 이 값 이하(로봇 몸·다리)는 뺌 [m]
+    map_topic: /lidar_odom/map           # 위치 계산에 쓰는 칸 지도
+    map_publish_period: 1.0              # [s], 0 이하 = 안 냄
+
+    # ------------------------------------------------------------------ 장착 상수 (go2_calib.py 확정값)
+    #   R_LB : 몸체 → L1 회전 (행 우선 9개),  v_L = R_LB · v_B
+    #   lever: 몸체 좌표에서 본 L1 위치 [m]
+    #   L1 점 → 몸체 점:  p_B = R_LBᵀ · p_L + lever
+    R_LB: [0.523029, -0.838576, 0.15242,
+           -0.810712, -0.544668, -0.214668,
+           0.263034, -0.011292, -0.964721]
+    lever: [0.322, 0.005, 0.050]
+
+    # ------------------------------------------------------------------ 알고리즘 (11/19 비교표 설정 + k = 40)
+    dof: 3                    # 3 = x, y, yaw (평평한 바닥) / 6 = x, y, z, roll, pitch, yaw
+    use_z_min: true           # true 면 z_min 아래(바닥)를 뺌
+    z_min: 0.0                # 몸체 높이 하한 [m] (몸통 중심 기준, 이보다 낮은 장애물은 위치 계산에 안 씀)
+    use_z_max: true
+    z_max: 2.0                # 몸체 높이 상한 [m]
+    r_min: 0.6                # 센서 거리 하한 [m] (로봇 몸·다리, 발밑 바닥 제거)
+    r_max: 0.0                # 센서 거리 상한 [m] (0 이하 = 없음)
+    bootstrap_frames: 14      # 처음 14 프레임(약 0.9 s)은 정지로 봄 → 그동안 로봇을 세워 둘 것
+    voxel: 0.05               # 지도 칸 크기 [m], 칸마다 처음 들어온 점 하나만 둠
+    normal_k: 40              # 평면(법선) 이웃 점 수 k. 평면 조각 반지름 r ≈ voxel·√(k/π) ≈ 0.18 m
+    max_corr_dist: 0.5        # 짝 거리 한계 d_max [m]
+    max_iter: 100             # 가우스-뉴턴 최대 반복 (줄이면 빨라지지만 결과가 조금 달라짐)
+    tol_trans: 1.0e-4         # 수렴 이동 ε_t [m]
+    tol_rot: 1.0e-5           # 수렴 회전 ε_θ [rad]
+    min_corr: 10              # 짝이 이보다 적으면 그 프레임은 실패 → 직전 자세 유지
+
+    # ------------------------------------------------------------------ 처리 시간 대책
+    # 지도 자르기 반경 R ≥ (L1 최대 측정 거리 30 m) + d_max 0.5 m + 이웃 여유 0.5 m = 31 m
+    #   → 센서가 볼 수 있는 곳의 지도는 지우지 않으므로 결과가 자르지 않을 때와 같음
+    #   (녹화로 시험해 보니 R = 10, 15 m 는 넓은 홀에서 결과가 크게 달라졌음)
+    map_radius: 31.0          # [m], 0 이하 = 안 자름
+    map_crop_every: 10        # 몇 프레임마다 자를지
+    # 최근접 트리: 큰 트리(지도 앞부분)는 가끔, 그 뒤 새 점은 작은 트리로 찾음 (결과는 매 프레임 새로 만든 것과 같음)
+    #   홀 8자 녹화: 65 ms 넘는 프레임 9.3 % (매 프레임) → 4.3 % (2000)
+    tree_rebuild_points: 2000 # 새 점이 이 수를 넘으면 큰 트리를 새로 만듦, 0 = 매 프레임
+
+    # ------------------------------------------------------------------ 기록
+    stats_period: 5.0         # [s] 처리 시간·건너뛴 프레임 로그 간격, 0 이하 = 안 남김
+    pose_log_csv: ""          # 프레임별 자세 CSV 경로 (빈 문자열 = 안 적음)
